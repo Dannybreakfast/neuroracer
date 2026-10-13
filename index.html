@@ -76,8 +76,13 @@ let segs=[];
 function buildRoad(curv){segs=[];let n=0;
   while(n<3000){const len=40+Math.random()*80|0,c=(Math.random()*2-1)*curv,h=(Math.random()*2-1)*20;
     for(let i=0;i<len;i++,n++){const t=i/len,e=Math.sin(Math.PI*t);segs.push({c:c*e,y:h*e})}
-    for(let i=0;i<20+Math.random()*40;i++,n++)segs.push({c:0,y:0})}}
-const lvDrive=l=>({speed:2600+l*260,curv:2+l*0.55});
+    for(let i=0;i<20+Math.random()*40;i++,n++)segs.push({c:0,y:0})}
+  maxC=Math.max(...segs.map(s=>Math.abs(s.c)))}
+const lvDrive=l=>({speed:2600+l*260,curv:Math.min(5,2+l*0.4)});
+const BOOST_MAX=1.75,DRIFT_K=1.2/9000,STEER_MIN=3.4,STEER_MARGIN=1.6;
+let maxC=0;
+// steer authority always >= 1.6x worst-case drift (max road curve x current speed incl. boost)
+const steerRate=(spd)=>Math.max(STEER_MIN,STEER_MARGIN*maxC*spd*DRIFT_K);
 const lvSign=l=>Math.max(250,1100*Math.pow(0.9,l));
 
 // ---------- game state ----------
@@ -93,7 +98,7 @@ function run(mode,len,inBaseline){
   const d=lvDrive(store.lv.drive);buildRoad(d.curv);
   G={mode,len,inBaseline,t:0,pos:0,x:0,paused:false,drive:mode!=='sign',sign:mode!=='drive',
      lvS:store.lv.sign,lvD:store.lv.drive,startLv:{...store.lv},
-     sg:null,vx:0,boost:1,nextSign:1.5,hits:0,miss:0,fa:0,cr:0,rts:[],
+     sg:null,glow:0,vx:0,boost:1,nextSign:1.5,hits:0,miss:0,fa:0,cr:0,rts:[],
      errSum:0,inLane:0,off:0,samples:0,blk:{h:0,m:0,f:0,c:0,in:0,n:0,t:0},flash:null};
   last=performance.now();cancelAnimationFrame(raf);raf=requestAnimationFrame(loop)}
 
@@ -101,9 +106,9 @@ function newSign(){const st=store.settings,isT=Math.random()<0.33;let col=st.col
   if(!isT){do{col=Math.random()<.5?st.col:Object.keys(COLORS)[Math.random()*4|0];shp=Math.random()<.5?st.shp:SHAPES[Math.random()*4|0]}while(col===st.col&&shp===st.shp)}
   G.sg={col,shp,isT,t0:G.t,win:lvSign(G.lvS)/1000,resp:false,x:(Math.random()*.5-.25)}}
 function respond(){if(!G||G.paused||!G.sign)return;const s=G.sg;
-  if(s&&!s.resp){s.resp=true;if(s.isT){G.hits++;G.blk.h++;G.boost=Math.min(1.3,G.boost*1.025);G.rts.push((G.t-s.t0)*1000);G.flash=['#22c55e',G.t]}else{G.fa++;G.blk.f++;ease();G.flash=['#ef4444',G.t]}}
+  if(s&&!s.resp){s.resp=true;if(s.isT){G.hits++;G.blk.h++;G.boost=Math.min(BOOST_MAX,G.boost+0.05);G.rts.push((G.t-s.t0)*1000);G.flash=['#22c55e',G.t]}else{G.fa++;G.blk.f++;ease();G.flash=['#ef4444',G.t]}}
   else if(!s){G.fa++;G.blk.f++;ease();G.flash=['#ef4444',G.t]}}
-const ease=()=>G.boost=Math.max(1,G.boost*0.99);
+const ease=()=>G.boost=Math.max(1,G.boost-0.04);
 function closeSign(){const s=G.sg;if(!s.resp){if(s.isT){G.miss++;G.blk.m++;ease()}else{G.cr++;G.blk.c++}}G.sg=null;G.nextSign=G.t+0.9+Math.random()*1.4}
 
 function adapt(){const b=G.blk;
@@ -114,7 +119,8 @@ function adapt(){const b=G.blk;
 
 function update(dt){G.t+=dt;const d=lvDrive(G.lvD),seg=segs[Math.floor(G.pos/SEG)%segs.length];
   G.pos+=d.speed*G.boost*dt*(G.drive?1:0.7);
-  if(G.drive){let steer=(keys.r?1:0)-(keys.l?1:0);G.vx+=(steer*3.4-G.vx)*Math.min(1,dt*(steer?14:10));G.x+=G.vx*dt;G.x-=seg.c*dt*d.speed*G.boost/9000*1.2;
+  G.glow+=((G.drive&&Math.abs(G.x)<.35?1:0)-G.glow)*Math.min(1,dt*6);
+  if(G.drive){let steer=(keys.r?1:0)-(keys.l?1:0);const spd=d.speed*G.boost;G.vx+=(steer*steerRate(spd)-G.vx)*Math.min(1,dt*(steer?14:10));G.x+=G.vx*dt;G.x-=seg.c*dt*spd*DRIFT_K;
     const e=Math.abs(G.x);G.errSum+=e*dt;G.samples+=dt;const inl=e<0.35;if(inl)G.inLane+=dt;if(e>1)G.off+=dt;
     G.blk.n+=dt;if(inl)G.blk.in+=dt;G.x=Math.max(-2,Math.min(2,G.x))}else G.x*=0.9;
   if(G.sign){if(G.sg&&G.t-G.sg.t0>G.sg.win)closeSign();if(!G.sg&&G.t>=G.nextSign)newSign()}
@@ -136,7 +142,9 @@ function render(){const sky=cx.createLinearGradient(0,0,0,H/2);sky.addColorStop(
     const alt=((base+n)>>2)&1;quad(alt?'#173020':'#1b3a26',W/2,p1.y,W*2,W/2,p2.y,W*2);
     quad(alt?'#c0392b':'#eee',p1.x,p1.y,p1.w*1.12,p2.x,p2.y,p2.w*1.12);
     quad(alt?'#3a3f4b':'#41464f',p1.x,p1.y,p1.w,p2.x,p2.y,p2.w);
-    if(alt)quad('#e8e8e8',p1.x,p1.y,p1.w*.02,p2.x,p2.y,p2.w*.02);
+    if(G.drive&&G.glow>.01)quad(`rgba(34,211,238,${.07*G.glow})`,p1.x,p1.y,p1.w*.35,p2.x,p2.y,p2.w*.35);
+    if(alt){const gl=G.drive?G.glow:1;if(G.drive&&gl>.01){cx.shadowColor='#22d3ee';cx.shadowBlur=18*gl*devicePixelRatio;quad(`rgba(34,211,238,${.35*gl})`,p1.x,p1.y,p1.w*.06,p2.x,p2.y,p2.w*.06)}
+      quad(G.drive?`rgb(${120-86*gl|0},${120+91*gl|0},${120+118*gl|0})`:'#e8e8e8',p1.x,p1.y,p1.w*.02,p2.x,p2.y,p2.w*.02);cx.shadowBlur=0}
     for(const lx of[-.33,.33])quad('rgba(255,255,255,.12)',p1.x+p1.w*lx,p1.y,p1.w*.01,p2.x+p2.w*lx,p2.y,p2.w*.01);
     maxy=p2.y}
   // car
