@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>NeuroRacer Trainer</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#0b0f17;color:#dfe6f2;font:15px system-ui,sans-serif;overflow:hidden;touch-action:none}
+#game{display:block;width:100vw;height:100vh}
+.ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(8,11,18,.92);overflow:auto;padding:16px}
+.card{max-width:560px;width:100%;background:#141b28;border:1px solid #26314a;border-radius:14px;padding:20px}
+h1{margin:0 0 4px;font-size:24px}h2{margin:0 0 10px;font-size:19px}small,.mut{color:#8b97ad}
+button{background:#2b6cf6;color:#fff;border:0;border-radius:9px;padding:11px 14px;font-size:15px;margin:4px 4px 4px 0;cursor:pointer}
+button.alt{background:#253048}.row{display:flex;flex-wrap:wrap;gap:4px}
+label{display:block;margin:8px 0}select,input{background:#0b0f17;color:#dfe6f2;border:1px solid #33405c;border-radius:6px;padding:6px}
+table{width:100%;border-collapse:collapse;margin:8px 0}td{padding:4px 2px;border-bottom:1px solid #222c40}td:last-child{text-align:right;font-weight:600}
+#hud{position:fixed;top:8px;left:10px;right:10px;display:flex;justify-content:space-between;font-weight:600;pointer-events:none;text-shadow:0 1px 3px #000}
+#pauseBtn{position:fixed;top:36px;right:10px;padding:6px 10px;background:#253048;display:none}
+#touch{position:fixed;bottom:12px;left:0;right:0;display:none;justify-content:space-between;padding:0 12px;pointer-events:none}
+#touch button{pointer-events:auto;width:84px;height:84px;font-size:28px;border-radius:50%;background:rgba(43,108,246,.45);margin:0}
+#touch .go{width:120px;border-radius:42px;background:rgba(40,190,110,.55);font-size:18px}
+.hide{display:none!important}canvas#chart{width:100%;height:170px;background:#0b0f17;border-radius:8px}
+</style></head><body>
+<canvas id="game"></canvas>
+<div id="hud" class="hide"><span id="hL"></span><span id="hR"></span></div>
+<button id="pauseBtn">❚❚</button>
+<div id="touch"><div><button id="tL">◀</button> <button id="tR">▶</button></div><button id="tGo" class="go">TAP</button></div>
+
+<div id="menu" class="ov"><div class="card">
+<h1>NeuroRacer Trainer</h1><div class="mut">Focus &amp; multitasking training</div>
+<p id="lvls" class="mut"></p>
+<div class="row"><button data-m="multi">Multitask</button><button data-m="drive" class="alt">Drive only</button><button data-m="sign" class="alt">Sign only</button><button data-m="baseline" class="alt">Baseline (3×45s)</button></div>
+<div class="row"><button class="alt" id="bHow">How to play</button><button class="alt" id="bSet">Settings</button><button class="alt" id="bHist">Progress</button></div>
+<p><small>Inspired by NeuroRacer (Anguera, Gazzaley et al., <i>Nature</i> 2013). This is an independent hobby trainer — not the clinical product (EndeavorRx/Akili) and makes no medical claims.</small></p>
+</div></div>
+
+<div id="how" class="ov hide"><div class="card"><h2>How to play</h2>
+<p><b>Drive:</b> keep the car centered in the lane as the road winds. Keyboard ←/→ or A/D; touch ◀ ▶.</p>
+<p><b>Signs:</b> shapes flash briefly. Respond <b>only</b> to the target (<span id="tgtTxt"></span>) with <b>Space</b> or <b>TAP</b>. Ignore everything else.</p>
+<p><b>Multitask</b> does both. Difficulty adapts every ~20 s per task (staircase aiming at ~80% success): road speed/curvature and sign display time tighten when you do well and ease when you don't.</p>
+<p><b>Baseline</b> runs short sign-only, drive-only and multitask blocks to measure your multitasking cost.</p>
+<p>P / Esc pauses.</p><button class="back">Back</button></div></div>
+
+<div id="set" class="ov hide"><div class="card"><h2>Settings</h2>
+<label>Session length (sec) <input id="sLen" type="number" min="30" max="900" step="30"></label>
+<label>Target color <select id="sCol"></select></label>
+<label>Target shape <select id="sShp"></select></label>
+<button id="sReset" class="alt">Reset difficulty levels</button> <button id="sClear" class="alt">Clear history</button><br>
+<button class="back">Save &amp; back</button></div></div>
+
+<div id="hist" class="ov hide"><div class="card"><h2>Progress</h2>
+<canvas id="chart" width="520" height="170"></canvas>
+<div class="mut"><span style="color:#4ade80">■</span> sign accuracy % &nbsp;<span style="color:#60a5fa">■</span> drive in-lane % &nbsp;<span style="color:#f59e0b">■</span> multitask cost % (daily avg)</div>
+<div id="histList" style="max-height:220px;overflow:auto"></div><button class="back">Back</button></div></div>
+
+<div id="paused" class="ov hide"><div class="card"><h2>Paused</h2><button id="resume">Resume</button><button id="quit" class="alt">Quit to menu</button></div></div>
+<div id="end" class="ov hide"><div class="card"><h2 id="endT">Results</h2><div id="endBody"></div><button class="back">Menu</button></div></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id), LS='nrt_v1';
+const COLORS={green:'#22c55e',blue:'#3b82f6',red:'#ef4444',yellow:'#facc15'}, SHAPES=['circle','square','triangle','diamond'];
+let store=JSON.parse(localStorage.getItem(LS)||'null')||{};
+store.settings=Object.assign({len:180,col:'green',shp:'circle'},store.settings);
+store.lv=Object.assign({sign:0,drive:0},store.lv); store.hist=store.hist||[];
+const save=()=>localStorage.setItem(LS,JSON.stringify(store));
+
+const cv=$('game'),cx=cv.getContext('2d'); let W,H;
+function resize(){W=cv.width=innerWidth*devicePixelRatio;H=cv.height=innerHeight*devicePixelRatio}
+addEventListener('resize',resize);resize();
+const isTouch=matchMedia('(pointer:coarse)').matches||'ontouchstart'in window;
+
+// ---------- road ----------
+const SEG=200,DRAW=150,ROADW=2000,CAMH=1000,CAMD=0.84;
+let segs=[];
+function buildRoad(curv){segs=[];let n=0;
+  while(n<3000){const len=40+Math.random()*80|0,c=(Math.random()*2-1)*curv,h=(Math.random()*2-1)*20;
+    for(let i=0;i<len;i++,n++){const t=i/len,e=Math.sin(Math.PI*t);segs.push({c:c*e,y:h*e})}
+    for(let i=0;i<20+Math.random()*40;i++,n++)segs.push({c:0,y:0})}}
+const lvDrive=l=>({speed:2600+l*260,curv:2+l*0.55});
+const lvSign=l=>Math.max(250,1100*Math.pow(0.9,l));
+
+// ---------- game state ----------
+let G=null,keys={},queue=[],baselineRes=[],raf=0,last=0;
+function startMode(m){
+  if(m==='baseline'){queue=['sign','drive','multi'];baselineRes=[];return nextQueued(45)}
+  queue=[];run(m,store.settings.len)}
+function nextQueued(len){const m=queue.shift();run(m,len,true)}
+function run(mode,len,inBaseline){
+  hideAll();$('hud').classList.remove('hide');$('pauseBtn').style.display='block';
+  $('touch').style.display=isTouch?'flex':'none';
+  $('tL').parentElement.style.visibility=mode==='sign'?'hidden':'visible';$('tGo').style.visibility=mode==='drive'?'hidden':'visible';
+  const d=lvDrive(store.lv.drive);buildRoad(d.curv);
+  G={mode,len,inBaseline,t:0,pos:0,x:0,paused:false,drive:mode!=='sign',sign:mode!=='drive',
+     lvS:store.lv.sign,lvD:store.lv.drive,startLv:{...store.lv},
+     sg:null,nextSign:1.5,hits:0,miss:0,fa:0,cr:0,rts:[],
+     errSum:0,inLane:0,off:0,samples:0,blk:{h:0,m:0,f:0,c:0,in:0,n:0,t:0},flash:null};
+  last=performance.now();cancelAnimationFrame(raf);raf=requestAnimationFrame(loop)}
+
+function newSign(){const st=store.settings,isT=Math.random()<0.33;let col=st.col,shp=st.shp;
+  if(!isT){do{col=Math.random()<.5?st.col:Object.keys(COLORS)[Math.random()*4|0];shp=Math.random()<.5?st.shp:SHAPES[Math.random()*4|0]}while(col===st.col&&shp===st.shp)}
+  G.sg={col,shp,isT,t0:G.t,win:lvSign(G.lvS)/1000,resp:false,x:(Math.random()*.5-.25)}}
+function respond(){if(!G||G.paused||!G.sign)return;const s=G.sg;
+  if(s&&!s.resp){s.resp=true;if(s.isT){G.hits++;G.blk.h++;G.rts.push((G.t-s.t0)*1000);G.flash=['#22c55e',G.t]}else{G.fa++;G.blk.f++;G.flash=['#ef4444',G.t]}}
+  else if(!s){G.fa++;G.blk.f++;G.flash=['#ef4444',G.t]}}
+function closeSign(){const s=G.sg;if(!s.resp){if(s.isT){G.miss++;G.blk.m++}else{G.cr++;G.blk.c++}}G.sg=null;G.nextSign=G.t+0.9+Math.random()*1.4}
+
+function adapt(){const b=G.blk;
+  if(G.sign&&b.h+b.m+b.f+b.c>=4){const hr=b.h/Math.max(1,b.h+b.m),cr=b.c/Math.max(1,b.c+b.f),p=(hr+cr)/2;
+    if(p>=.85)G.lvS++;else if(p<.75)G.lvS=Math.max(0,G.lvS-1)}
+  if(G.drive&&b.n>0){const p=b.in/b.n;if(p>=.85)G.lvD++;else if(p<.75)G.lvD=Math.max(0,G.lvD-1)}
+  G.blk={h:0,m:0,f:0,c:0,in:0,n:0,t:G.t}}
+
+function update(dt){G.t+=dt;const d=lvDrive(G.lvD),seg=segs[Math.floor(G.pos/SEG)%segs.length];
+  G.pos+=d.speed*dt*(G.drive?1:0.7);
+  if(G.drive){let steer=(keys.r?1:0)-(keys.l?1:0);G.x+=steer*dt*2.2;G.x-=seg.c*dt*d.speed/9000*1.5;
+    const e=Math.abs(G.x);G.errSum+=e*dt;G.samples+=dt;const inl=e<0.35;if(inl)G.inLane+=dt;if(e>1)G.off+=dt;
+    G.blk.n+=dt;if(inl)G.blk.in+=dt;G.x=Math.max(-2,Math.min(2,G.x))}else G.x*=0.9;
+  if(G.sign){if(G.sg&&G.t-G.sg.t0>G.sg.win)closeSign();if(!G.sg&&G.t>=G.nextSign)newSign()}
+  if(G.t-G.blk.t>=20)adapt();
+  if(G.t>=G.len)finish()}
+
+// ---------- render ----------
+function proj(wx,wy,wz,camX,camY,camZ){const dz=wz-camZ,s=CAMD/dz;return{x:W/2+s*(wx-camX)*W/2,y:H/2-s*(wy-camY)*H/2,w:s*ROADW*W/2}}
+function quad(c,x1,y1,w1,x2,y2,w2){cx.fillStyle=c;cx.beginPath();cx.moveTo(x1-w1,y1);cx.lineTo(x2-w2,y2);cx.lineTo(x2+w2,y2);cx.lineTo(x1+w1,y1);cx.fill()}
+function render(){const sky=cx.createLinearGradient(0,0,0,H/2);sky.addColorStop(0,'#0a1630');sky.addColorStop(1,'#2a3b66');
+  cx.fillStyle=sky;cx.fillRect(0,0,W,H);cx.fillStyle='#14261a';cx.fillRect(0,H/2,W,H/2);
+  if(!G)return;
+  const base=Math.floor(G.pos/SEG),pct=(G.pos%SEG)/SEG;let x=0,dx=-segs[base%segs.length].c*pct,y=0,maxy=H;
+  const camX=G.x*ROADW,camY=CAMH;let pts=[];
+  for(let n=0;n<DRAW;n++){const s=segs[(base+n)%segs.length],z1=(n)*SEG-pct*SEG,z2=z1+SEG;
+    const y2=y+s.y;
+    const p1=proj(x,y,z1+1,camX,camY,0),p2=proj(x+dx,y2,z2,camX,camY,0);x+=dx;dx+=s.c;y=y2;
+    if(p2.y>=maxy||z1<=0){continue}
+    const alt=((base+n)>>2)&1;quad(alt?'#173020':'#1b3a26',W/2,p1.y,W*2,W/2,p2.y,W*2);
+    quad(alt?'#c0392b':'#eee',p1.x,p1.y,p1.w*1.12,p2.x,p2.y,p2.w*1.12);
+    quad(alt?'#3a3f4b':'#41464f',p1.x,p1.y,p1.w,p2.x,p2.y,p2.w);
+    if(alt)quad('#e8e8e8',p1.x,p1.y,p1.w*.02,p2.x,p2.y,p2.w*.02);
+    for(const lx of[-.33,.33])quad('rgba(255,255,255,.12)',p1.x+p1.w*lx,p1.y,p1.w*.01,p2.x+p2.w*lx,p2.y,p2.w*.01);
+    maxy=p2.y}
+  // car
+  const cw=W*0.11,ch=cw*.5,carX=W/2,carY=H*.86,off=Math.abs(G.x)>1;
+  cx.fillStyle='rgba(0,0,0,.4)';cx.fillRect(carX-cw/2,carY+ch*.8,cw,ch*.25);
+  cx.fillStyle=off?'#f97316':'#e11d48';cx.fillRect(carX-cw/2,carY,cw,ch*.8);
+  cx.fillStyle='#111';cx.fillRect(carX-cw*.35,carY-ch*.35,cw*.7,ch*.4);
+  cx.fillStyle='#fde68a';cx.fillRect(carX-cw*.45,carY+ch*.15,cw*.12,ch*.15);cx.fillRect(carX+cw*.33,carY+ch*.15,cw*.12,ch*.15);
+  // sign
+  if(G.sg){const s=G.sg,r=Math.min(W,H)*.07,sx=W/2+s.x*W,sy=H*.3;cx.fillStyle=COLORS[s.col];cx.beginPath();
+    if(s.shp==='circle')cx.arc(sx,sy,r,0,7);else if(s.shp==='square')cx.rect(sx-r*.9,sy-r*.9,r*1.8,r*1.8);
+    else if(s.shp==='triangle'){cx.moveTo(sx,sy-r);cx.lineTo(sx+r,sy+r*.8);cx.lineTo(sx-r,sy+r*.8)}
+    else{cx.moveTo(sx,sy-r*1.1);cx.lineTo(sx+r,sy);cx.lineTo(sx,sy+r*1.1);cx.lineTo(sx-r,sy)}
+    cx.fill();cx.lineWidth=3*devicePixelRatio;cx.strokeStyle='#000';cx.stroke()}
+  if(G.flash&&G.t-G.flash[1]<.25){cx.strokeStyle=G.flash[0];cx.lineWidth=12*devicePixelRatio;cx.strokeRect(0,0,W,H)}
+  // lane meter
+  if(G.drive){const mw=W*.3,mx=W/2-mw/2,my=H*.96;cx.fillStyle='#222';cx.fillRect(mx,my,mw,6*devicePixelRatio);
+    cx.fillStyle='#22c55e55';cx.fillRect(W/2-mw*.35/4,my,mw*.35/2,6*devicePixelRatio);
+    cx.fillStyle=Math.abs(G.x)<.35?'#22c55e':'#f59e0b';cx.fillRect(W/2+Math.max(-1,Math.min(1,G.x/2))*mw/2-3,my-4,6*devicePixelRatio,14*devicePixelRatio)}
+  const lbl={multi:'Multitask',drive:'Drive only',sign:'Sign only'}[G.mode];
+  $('hL').textContent=`${lbl}  ${Math.max(0,Math.ceil(G.len-G.t))}s`;
+  $('hR').textContent=(G.sign?`Sign Lv ${G.lvS} `:'')+(G.drive?` Drive Lv ${G.lvD}`:'')}
+
+function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(G&&!G.paused){update(dt)}render();if(G)raf=requestAnimationFrame(loop)}
+
+// ---------- results ----------
+function stats(g){const nT=g.hits+g.miss,nD=g.fa+g.cr;
+  const hr=nT?g.hits/nT:null,cr=nD?g.cr/nD:null,acc=hr==null?(cr??0):cr==null?hr:(hr+cr)/2;
+  return{mode:g.mode,date:new Date().toISOString(),len:Math.round(g.t),
+   signAcc:g.sign?Math.round(acc*100):null,hitRate:g.sign&&hr!=null?Math.round(hr*100):null,fa:g.sign?g.fa:null,miss:g.sign?g.miss:null,hits:g.sign?g.hits:null,
+   rt:g.sign&&g.rts.length?Math.round(g.rts.reduce((a,b)=>a+b)/g.rts.length):null,
+   driveErr:g.drive?+(g.errSum/Math.max(.01,g.samples)).toFixed(3):null,inLane:g.drive?Math.round(g.inLane/Math.max(.01,g.samples)*100):null,
+   offRoad:g.drive?+g.off.toFixed(1):null,lvS:g.lvS,lvD:g.lvD}}
+function lastSingle(mode){for(let i=store.hist.length-1;i>=0;i--)if(store.hist[i].mode===mode)return store.hist[i];return null}
+function cost(m){const s=lastSingle('sign'),d=lastSingle('drive');const o={};
+  if(s&&m.signAcc!=null&&s.signAcc)o.sign=Math.round((m.signAcc-s.signAcc)/s.signAcc*100);
+  if(d&&m.inLane!=null&&d.inLane)o.drive=Math.round((m.inLane-d.inLane)/d.inLane*100);return o}
+function finish(){const r=stats(G);
+  if(G.sign)store.lv.sign=G.lvS;if(G.drive)store.lv.drive=G.lvD;
+  if(r.mode==='multi')r.cost=cost(r);store.hist.push(r);save();
+  const wasB=G.inBaseline;G=null;cancelAnimationFrame(raf);render();
+  if(wasB){baselineRes.push(r);if(queue.length){return showInterstitial(r)}}
+  showEnd(wasB?baselineRes:[r])}
+function showInterstitial(r){hideAll();$('end').classList.remove('hide');$('endT').textContent='Baseline: next — '+({drive:'Drive only',multi:'Multitask'}[queue[0]]);
+  $('endBody').innerHTML=tbl(r)+'<button id="nextB">Start next block</button>';$('nextB').onclick=()=>nextQueued(45)}
+function tbl(r){const rows=[];const P=(k,v)=>rows.push(`<tr><td>${k}</td><td>${v}</td></tr>`);
+  P('Mode',{multi:'Multitask',drive:'Drive only',sign:'Sign only'}[r.mode]);
+  if(r.signAcc!=null){P('Sign accuracy',r.signAcc+'%');P('Hits / misses / false alarms',`${r.hits} / ${r.miss} / ${r.fa}`);P('Mean RT',r.rt!=null?r.rt+' ms':'—');P('Sign level',r.lvS)}
+  if(r.inLane!=null){P('Drive error (mean |offset|)',r.driveErr);P('Time in lane',r.inLane+'%');P('Off-road time',r.offRoad+' s');P('Drive level',r.lvD)}
+  if(r.cost){if(r.cost.sign!=null)P('Multitask cost – signs',r.cost.sign+'%');if(r.cost.drive!=null)P('Multitask cost – driving',r.cost.drive+'%');
+    if(r.cost.sign==null&&r.cost.drive==null)P('Multitask cost','run Sign/Drive only once to compute')}
+  return'<table>'+rows.join('')+'</table>'}
+function showEnd(rs){hideAll();$('end').classList.remove('hide');$('endT').textContent=rs.length>1?'Baseline results':'Results';
+  $('endBody').innerHTML=rs.map(tbl).join('')+'<p class="mut">Cost = (multitask − single-task) / single-task, vs. your most recent single-task run.</p>'}
+
+// ---------- UI ----------
+function hideAll(){for(const id of['menu','how','set','hist','paused','end'])$(id).classList.add('hide');$('hud').classList.add('hide');$('pauseBtn').style.display='none';$('touch').style.display='none'}
+function show(id){hideAll();$(id).classList.remove('hide')}
+function menu(){G=null;cancelAnimationFrame(raf);render();show('menu');
+  $('lvls').textContent=`Target: ${store.settings.col} ${store.settings.shp} · Sign level ${store.lv.sign} · Drive level ${store.lv.drive} · Session ${store.settings.len}s`}
+document.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>startMode(b.dataset.m));
+document.querySelectorAll('.back').forEach(b=>b.onclick=()=>{if(!$('set').classList.contains('hide'))saveSet();menu()});
+$('bHow').onclick=()=>{$('tgtTxt').textContent=store.settings.col+' '+store.settings.shp;show('how')};
+for(const c in COLORS)$('sCol').add(new Option(c,c));for(const s of SHAPES)$('sShp').add(new Option(s,s));
+$('bSet').onclick=()=>{$('sLen').value=store.settings.len;$('sCol').value=store.settings.col;$('sShp').value=store.settings.shp;show('set')};
+function saveSet(){store.settings.len=Math.max(30,Math.min(900,+$('sLen').value||180));store.settings.col=$('sCol').value;store.settings.shp=$('sShp').value;save()}
+$('sReset').onclick=()=>{store.lv={sign:0,drive:0};save();alert('Levels reset')};
+$('sClear').onclick=()=>{if(confirm('Clear all history?')){store.hist=[];save()}};
+$('bHist').onclick=()=>{show('hist');drawChart()};
+function pause(p){if(!G)return;G.paused=p;$('paused').classList.toggle('hide',!p)}
+$('pauseBtn').onclick=()=>pause(true);$('resume').onclick=()=>{pause(false);last=performance.now()};$('quit').onclick=()=>{queue=[];menu()};
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();
+  if(k==='arrowleft'||k==='a')keys.l=1;if(k==='arrowright'||k==='d')keys.r=1;
+  if(k===' '){e.preventDefault();if(!e.repeat)respond()}if((k==='p'||k==='escape')&&G)pause(!G.paused)});
+addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(k==='arrowleft'||k==='a')keys.l=0;if(k==='arrowright'||k==='d')keys.r=0});
+function hold(el,k){el.addEventListener('pointerdown',e=>{e.preventDefault();keys[k]=1});for(const ev of['pointerup','pointerleave','pointercancel'])el.addEventListener(ev,()=>keys[k]=0)}
+hold($('tL'),'l');hold($('tR'),'r');$('tGo').addEventListener('pointerdown',e=>{e.preventDefault();respond()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&G&&!G.paused)pause(true)});
+
+function drawChart(){const c=$('chart'),x=c.getContext('2d'),w=c.width,h=c.height;x.clearRect(0,0,w,h);
+  const days={};for(const r of store.hist){const d=r.date.slice(0,10);(days[d]=days[d]||[]).push(r)}
+  const keys=Object.keys(days).sort().slice(-30);
+  $('histList').innerHTML=store.hist.slice(-40).reverse().map(r=>`<div class="mut" style="font-size:13px;border-bottom:1px solid #222c40;padding:3px 0">${new Date(r.date).toLocaleString()} · ${r.mode} · ${r.signAcc!=null?'sign '+r.signAcc+'% '+(r.rt?r.rt+'ms ':''):''}${r.inLane!=null?'lane '+r.inLane+'% ':''}${r.cost&&r.cost.sign!=null?'cost '+r.cost.sign+'%':''}</div>`).join('')||'<p class="mut">No sessions yet.</p>';
+  x.strokeStyle='#26314a';x.fillStyle='#8b97ad';x.font='10px sans-serif';
+  const Y=v=>h-18-(v+50)/150*(h-28);for(const v of[-50,0,50,100]){x.beginPath();x.moveTo(26,Y(v));x.lineTo(w,Y(v));x.stroke();x.fillText(v,2,Y(v)+3)}
+  if(!keys.length)return;const X=i=>30+(keys.length===1?(w-40)/2:i*(w-40)/(keys.length-1));
+  const avg=(arr)=>arr.length?arr.reduce((a,b)=>a+b)/arr.length:null;
+  const series=[['#4ade80',rs=>avg(rs.filter(r=>r.signAcc!=null).map(r=>r.signAcc))],['#60a5fa',rs=>avg(rs.filter(r=>r.inLane!=null).map(r=>r.inLane))],
+    ['#f59e0b',rs=>avg(rs.filter(r=>r.cost&&r.cost.sign!=null).map(r=>r.cost.sign))]];
+  for(const[col,f]of series){x.strokeStyle=x.fillStyle=col;x.lineWidth=2;x.beginPath();let st=false;
+    keys.forEach((d,i)=>{const v=f(days[d]);if(v==null)return;st?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v));st=true});x.stroke();
+    keys.forEach((d,i)=>{const v=f(days[d]);if(v!=null){x.beginPath();x.arc(X(i),Y(v),3,0,7);x.fill()}})}
+  x.fillStyle='#8b97ad';x.fillText(keys[0].slice(5),26,h-4);if(keys.length>1)x.fillText(keys.at(-1).slice(5),w-34,h-4)}
+window.__nrt={startMode,get G(){return G},respond,keys};
+menu();
+</script></body></html>
